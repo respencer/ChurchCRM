@@ -16,8 +16,8 @@
 require 'Include/Config.php';
 require 'Include/Functions.php';
 
-use ChurchCRM\dto\SystemConfig;
 use ChurchCRM\Authentication\AuthenticationManager;
+use ChurchCRM\dto\SystemConfig;
 use ChurchCRM\model\ChurchCRM\ListOption;
 use ChurchCRM\Utils\InputUtils;
 use ChurchCRM\Utils\RedirectUtils;
@@ -313,12 +313,9 @@ if ($bErrorFlag) {
 <br>
 <table cellpadding="3" width="30%" align="center">
 
-
 <?php
-    $ids = SystemConfig::getValue('sInactiveClassification');
-    $str_arr = explode(',', $ids);
-    $inactive_classes = array_filter($str_arr, fn ($k) => is_numeric($k));
-
+    $aInactiveClassificationIds = explode(',', SystemConfig::getValue('sInactiveClassification'));
+    $aInactiveClasses = array_filter($aInactiveClassificationIds, fn ($k) => is_numeric($k));
 
 for ($row = 1; $row <= $numRows; $row++) {
     ?>
@@ -344,9 +341,8 @@ for ($row = 1; $row <= $numRows; $row++) {
             }
             if ($numRows > 0) {
                 echo "<a href=\"OptionManagerRowOps.php?mode=$mode&Order=$aSeqs[$row]&ListID=$listID&ID=" . $aIDs[$row] . '&Action=delete"><i class="fa fa-times"></i></a>';
-            }
-            ?>
-            
+            } ?>
+
         </td>
         <td class="TextColumn">
             <span class="SmallText">
@@ -366,12 +362,11 @@ for ($row = 1; $row <= $numRows; $row++) {
         }
         if ($mode === 'classes') {
             echo "<td>";
-            $check = in_array($aIDs[$row], $inactive_classes) ? "checked" : "";
+            $check = in_array($aIDs[$row], $aInactiveClasses) ? "checked" : "";
             echo "<input id='inactive$aIDs[$row]' type=\"checkbox\" onclick=\"$.get('OptionManagerRowOps.php?mode=$mode&Order=$aSeqs[$row]&ListID=$listID&ID=" . $aIDs[$row] . "&Action=Inactive')\" $check >";
             echo gettext("Inactive");
             echo "</td>";
-        }
-        ?>
+        } ?>
 
     </tr>
     <?php
