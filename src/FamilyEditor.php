@@ -8,61 +8,65 @@ use ChurchCRM\Bootstrapper;
 use ChurchCRM\dto\SystemConfig;
 use ChurchCRM\dto\SystemURLs;
 use ChurchCRM\Emails\notifications\NewPersonOrFamilyEmail;
+use ChurchCRM\model\ChurchCRM\Family;
+use ChurchCRM\model\ChurchCRM\FamilyCustom;
+use ChurchCRM\model\ChurchCRM\FamilyCustomMaster;
+use ChurchCRM\model\ChurchCRM\FamilyCustomMasterQuery;
+use ChurchCRM\model\ChurchCRM\FamilyCustomQuery;
 use ChurchCRM\model\ChurchCRM\FamilyQuery;
+use ChurchCRM\model\ChurchCRM\ListOptionQuery;
 use ChurchCRM\model\ChurchCRM\Note;
 use ChurchCRM\model\ChurchCRM\Person;
+use ChurchCRM\model\ChurchCRM\PersonCustom;
 use ChurchCRM\model\ChurchCRM\PersonQuery;
+use ChurchCRM\model\ChurchCRM\RecordProperty;
+use ChurchCRM\Service\SystemService;
 use ChurchCRM\Utils\InputUtils;
-use ChurchCRM\Utils\MiscUtils;
 use ChurchCRM\Utils\RedirectUtils;
+use Propel\Runtime\Propel;
+
+if (AuthenticationManager::getCurrentUser()->isAddRecordsEnabled() === false) {
+    RedirectUtils::redirect('v2/dashboard');
+}
 
 $sPageTitle = gettext('Family Editor');
 
 $iFamilyID = -1;
 
-// Get the FamilyID from the querystring
+// Get the FamilyID from the query string
 if (array_key_exists('FamilyID', $_GET)) {
     $iFamilyID = InputUtils::legacyFilterInput($_GET['FamilyID'], 'int');
 }
 
-// Security: User must have Add or Edit Records permission to use this form in those manners
-// Clean error handling: (such as somebody typing an incorrect URL ?PersonID= manually)
+// Security: User must have Add or Edit Records permission to use this form
 if ($iFamilyID > 0) {
-    if (!(AuthenticationManager::getCurrentUser()->isEditRecordsEnabled() || (AuthenticationManager::getCurrentUser()->isEditSelfEnabled() && $iFamilyID == AuthenticationManager::getCurrentUser()->getPerson()->getFamId()))) {
+    if (AuthenticationManager::getCurrentUser()->isEditRecordsEnabled() === false || (AuthenticationManager::getCurrentUser()->isEditSelfEnabled() === false && $iFamilyID == AuthenticationManager::getCurrentUser()->getPerson()->getFamId())) {
         RedirectUtils::redirect('v2/dashboard');
     }
 
-    $sSQL = 'SELECT fam_ID FROM family_fam WHERE fam_ID = ' . $iFamilyID;
-    if (mysqli_num_rows(RunQuery($sSQL)) == 0) {
+    $family = FamilyQuery::create()->findOneById($iFamilyID);
+
+    if (empty($family)) {
         RedirectUtils::redirect('v2/dashboard');
     }
-} elseif (!AuthenticationManager::getCurrentUser()->isAddRecordsEnabled()) {
-    RedirectUtils::redirect('v2/dashboard');
 }
 
-// Get the list of custom person fields
-$sSQL = 'SELECT family_custom_master.* FROM family_custom_master ORDER BY fam_custom_Order';
-$rsCustomFields = RunQuery($sSQL);
-$numCustomFields = mysqli_num_rows($rsCustomFields);
+// Get the list of custom family fields
+$customFields = FamilyCustomMasterQuery::create()->orderBy('fam_custom_order')->find();
+// TODO: Verify this is accurate
+$numCustomFields = count($customFields);
 
 // Get Field Security List Matrix
-$sSQL = 'SELECT * FROM list_lst WHERE lst_ID = 5 ORDER BY lst_OptionSequence';
-$rsSecurityGrp = RunQuery($sSQL);
+// TODO: What is 5? And verify this still works!
+$aSecurityType = ListOptionQuery::create()->orderByOptionSequence()->findById(5);
 
-while ($aRow = mysqli_fetch_array($rsSecurityGrp)) {
-    extract($aRow);
-    $aSecurityType[$lst_OptionID] = $lst_OptionName;
-}
-
+// TODO: Get rid of this flag
 $bErrorFlag = false;
 $sNameError = '';
 $sEmailError = '';
 $sWeddingDateError = '';
-
 $sName = '';
-
 $UpdateBirthYear = 0;
-
 $aFirstNameError = [];
 $aBirthDateError = [];
 $aperFlags = [];
@@ -83,7 +87,6 @@ if (isset($_POST['FamilySubmit']) || isset($_POST['FamilySubmitAndAdd'])) {
     }
 
     $sCountry = InputUtils::legacyFilterInput($_POST['Country']);
-    $iFamilyMemberRows = InputUtils::legacyFilterInput($_POST['FamCount']);
 
     if ($_POST['stateType'] == "dropDown") {
         $sState = InputUtils::legacyFilterInput($_POST['State']);
@@ -94,104 +97,101 @@ if (isset($_POST['FamilySubmit']) || isset($_POST['FamilySubmitAndAdd'])) {
     $sHomePhone = InputUtils::legacyFilterInput($_POST['HomePhone']);
     $sWorkPhone = InputUtils::legacyFilterInput($_POST['WorkPhone']);
     $sCellPhone = InputUtils::legacyFilterInput($_POST['CellPhone']);
-    $sEmail = InputUtils::legacyFilterInput($_POST['Email']);
+    $sEmail = InputUtils::legacyFilterInput($_POST['Email'] ?? '');
     $bSendNewsLetter = isset($_POST['SendNewsLetter']);
 
     $nLatitude = 0.0;
-    $nLongitude = 0.0;
-    if (array_key_exists('Latitude', $_POST)) {
+
+    if (array_key_exists('Latitude', $_POST) && is_numeric($_POST['Latitude'])) {
         $nLatitude = InputUtils::legacyFilterInput($_POST['Latitude'], 'float');
     }
-    if (array_key_exists('Longitude', $_POST)) {
+
+    $nLongitude = 0.0;
+
+    if (array_key_exists('Longitude', $_POST) && is_numeric($_POST['Longitude'])) {
         $nLongitude = InputUtils::legacyFilterInput($_POST['Longitude'], 'float');
     }
 
-    if (!is_numeric($nLatitude)) {
-        $nLatitude = null;
-    }
-
-    if (!is_numeric($nLongitude)) {
-        $nLongitude = null;
-    }
-
     $nEnvelope = 0;
-    if (array_key_exists('Envelope', $_POST)) {
+
+    if (array_key_exists('Envelope', $_POST) && is_numeric($_POST['Envelope'])) {
         $nEnvelope = InputUtils::legacyFilterInput($_POST['Envelope'], 'int');
     }
 
-    if (is_numeric($nEnvelope)) { // Only integers are allowed as Envelope Numbers
-        if (intval($nEnvelope) == floatval($nEnvelope)) {
-            $nEnvelope = "'" . intval($nEnvelope) . "'";
-        } else {
-            $nEnvelope = "'0'";
-        }
-    } else {
-        $nEnvelope = "'0'";
-    }
-
     $iPropertyID = 0;
-    if (array_key_exists('PropertyID', $_POST)) {
+
+    if (array_key_exists('PropertyID', $_POST) && is_numeric($_POST['PropertyID'])) {
         $iPropertyID = InputUtils::legacyFilterInput($_POST['PropertyID'], 'int');
     }
+
     $dWeddingDate = InputUtils::legacyFilterInput($_POST['WeddingDate'] ?? '');
 
-    $bNoFormat_HomePhone = isset($_POST['NoFormat_HomePhone']);
-    $bNoFormat_WorkPhone = isset($_POST['NoFormat_WorkPhone']);
-    $bNoFormat_CellPhone = isset($_POST['NoFormat_CellPhone']);
+    $bNoFormat_HomePhone = (isset($_POST['NoFormat_HomePhone']) && $_POST['NoFormat_HomePhone'] === 'on');
+    $bNoFormat_WorkPhone = (isset($_POST['NoFormat_WorkPhone']) && $_POST['NoFormat_WorkPhone'] === 'on');
+    $bNoFormat_CellPhone = (isset($_POST['NoFormat_CellPhone']) && $_POST['NoFormat_CellPhone'] === 'on');
 
-    //Loop through the Family Member 'quick entry' form fields
-    for ($iCount = 1; $iCount <= $iFamilyMemberRows; $iCount++) {
+    $iFamilyMemberRows = InputUtils::legacyFilterInput($_POST['FamCount']);
+
+    // Loop through the Family Member 'quick entry' form fields
+    for ($key = 1; $key <= $iFamilyMemberRows; $key++) {
         // Assign everything to arrays
-        $aFirstNames[$iCount] = InputUtils::legacyFilterInput($_POST['FirstName' . $iCount]);
-        $aMiddleNames[$iCount] = InputUtils::legacyFilterInput($_POST['MiddleName' . $iCount]);
-        $aLastNames[$iCount] = InputUtils::legacyFilterInput($_POST['LastName' . $iCount]);
-        $aSuffix[$iCount] = InputUtils::legacyFilterInput($_POST['Suffix' . $iCount]);
-        $aRoles[$iCount] = InputUtils::legacyFilterInput($_POST['Role' . $iCount], 'int');
-        $aGenders[$iCount] = InputUtils::legacyFilterInput($_POST['Gender' . $iCount], 'int');
-        $aBirthDays[$iCount] = InputUtils::legacyFilterInput($_POST['BirthDay' . $iCount], 'int');
-        $aBirthMonths[$iCount] = InputUtils::legacyFilterInput($_POST['BirthMonth' . $iCount], 'int');
-        $aBirthYears[$iCount] = InputUtils::legacyFilterInput($_POST['BirthYear' . $iCount], 'int');
-        $aClassification[$iCount] = InputUtils::legacyFilterInput($_POST['Classification' . $iCount], 'int');
-        $aPersonIDs[$iCount] = InputUtils::legacyFilterInput($_POST['PersonID' . $iCount], 'int');
-        $aUpdateBirthYear[$iCount] = InputUtils::legacyFilterInput($_POST['UpdateBirthYear'], 'int');
+        $aFirstNames[$key] = InputUtils::legacyFilterInput($_POST['FirstName' . $key]);
+        $aMiddleNames[$key] = InputUtils::legacyFilterInput($_POST['MiddleName' . $key]);
+        $aLastNames[$key] = InputUtils::legacyFilterInput($_POST['LastName' . $key]);
+        $aSuffix[$key] = InputUtils::legacyFilterInput($_POST['Suffix' . $key]);
+        $aRoles[$key] = InputUtils::legacyFilterInput($_POST['Role' . $key], 'int');
+        $aGenders[$key] = InputUtils::legacyFilterInput($_POST['Gender' . $key], 'int');
+        $aBirthDays[$key] = InputUtils::legacyFilterInput($_POST['BirthDay' . $key], 'int');
+        $aBirthMonths[$key] = InputUtils::legacyFilterInput($_POST['BirthMonth' . $key], 'int');
+        $aBirthYears[$key] = InputUtils::legacyFilterInput($_POST['BirthYear' . $key], 'int');
+        $aClassification[$key] = InputUtils::legacyFilterInput($_POST['Classification' . $key], 'int');
+        $aPersonIDs[$key] = InputUtils::legacyFilterInput($_POST['PersonID' . $key], 'int');
+        $aUpdateBirthYear[$key] = InputUtils::legacyFilterInput($_POST['UpdateBirthYear'], 'int');
 
         // Make sure first names were entered if editing existing family
-        if ($iFamilyID > 0) {
-            if (strlen($aFirstNames[$iCount]) == 0) {
-                $aFirstNameError[$iCount] = gettext('First name must be entered');
-                $bErrorFlag = true;
-            }
+        if (($iFamilyID > 0) && (strlen($aFirstNames[$key]) === 0)) {
+            $aFirstNameError[$key] = gettext('First name must be entered');
+            $bErrorFlag = true;
         }
 
-        // Validate any family member birthdays
-        if ($aBirthMonths[$iCount] > 0 xor $aBirthDays[$iCount] > 0) {
-            $aBirthDateError[$iCount] = gettext('Invalid Birth Date: Missing birth month or day.');
+        // Validate any family members birthdays
+        if (($aBirthMonths[$key] > 0) xor ($aBirthDays[$key] > 0)) {
+            $aBirthDateError[$key] = gettext('Invalid Birth Date: Missing birth month or day.');
             $bErrorFlag = true;
-        } elseif (strlen($aBirthYears[$iCount]) > 0 && $aBirthMonths[$iCount] == 0 && $aBirthDays[$iCount] == 0) {
-            $aBirthDateError[$iCount] = gettext('Invalid Birth Date: Missing birth month and day.');
+        }
+
+        if ((strlen($aBirthYears[$key]) > 0) && ($aBirthMonths[$key] === 0) && ($aBirthDays[$key] === 0)) {
+            $aBirthDateError[$key] = gettext('Invalid Birth Date: Missing birth month and day.');
             $bErrorFlag = true;
-        } elseif ((strlen($aFirstNames[$iCount]) > 0) && (strlen($aBirthYears[$iCount]) > 0)) {
-            if ($aBirthYears[$iCount] < 0) {
-                $aBirthDateError[$iCount] = gettext('Invalid Year');
+        }
+
+        if ((strlen($aFirstNames[$key]) > 0) && (strlen($aBirthYears[$key]) > 0)) {
+            $currentYear = SystemService::getCurrentYear();
+
+            if (($aBirthYears[$key] < 0) || ($aBirthYears[$key] > $currentYear)) {
+                $aBirthDateError[$key] = gettext('Invalid Year');
                 $bErrorFlag = true;
-            } elseif ($aBirthMonths[$iCount] > 0 && $aBirthDays[$iCount] > 0) {
-                if (!checkdate($aBirthMonths[$iCount], $aBirthDays[$iCount], $aBirthYears[$iCount])) {
-                    $aBirthDateError[$iCount] = gettext('Invalid Birth Date.');
-                    $bErrorFlag = true;
-                }
+            }
+
+            // TODO: Need better than checkdate()
+            if (($aBirthMonths[$key] > 0) && ($aBirthDays[$key] > 0) && (checkdate($aBirthMonths[$key], $aBirthDays[$key], $aBirthYears[$key]) === false)) {
+                $aBirthDateError[$key] = gettext('Invalid Birth Date.');
+                $bErrorFlag = true;
             }
         }
     }
 
-    //Did they enter a name?
+    // Did they enter a name?
     if (strlen($sName) < 1) {
         $sNameError = gettext('You must enter a name');
         $bErrorFlag = true;
     }
 
     // Validate Wedding Date if one was entered
+    // TODO: This is better than checkdate(), but can we do even better with DateTime?
     $dateString = parseAndValidateDate($dWeddingDate, Bootstrapper::getCurrentLocale()->getCountryCode(), $pasfut = 'past');
-    if ((strlen($dWeddingDate) > 0) && $dateString === false) {
+
+    if ((strlen($dWeddingDate) > 0) && ($dateString === false)) {
         $sWeddingDateError = '<span style="color: red; ">'
             . gettext('Not a valid Wedding Date') . '</span>';
         $bErrorFlag = true;
@@ -200,48 +200,50 @@ if (isset($_POST['FamilySubmit']) || isset($_POST['FamilySubmitAndAdd'])) {
     }
 
     // Validate Email
-    if (strlen($sEmail) > 0) {
-        if (checkEmail($sEmail) == false) {
-            $sEmailError = '<span style="color: red; ">'
-                . gettext('Email is Not Valid') . '</span>';
-            $bErrorFlag = true;
-            $sEmail = null;
-        }
+    if ((strlen($sEmail) > 0) && (checkEmail($sEmail) === false)) {
+        $sEmailError = '<span style="color: red; ">'
+                            . gettext('Email is Not Valid') . '</span>';
+        $bErrorFlag = true;
     }
+
+    $aCustomData = [];
 
     // Validate all the custom fields
-    $aCustomData = [];
-    while ($rowCustomField = mysqli_fetch_array($rsCustomFields, MYSQLI_BOTH)) {
-        extract($rowCustomField);
+    foreach ($customFields as $customField) {
+        // TODO: Neaten the logic in this foreach()
+        $currentFieldData = InputUtils::legacyFilterInput($_POST[$customField->getCustomField()]);
 
-        $currentFieldData = InputUtils::legacyFilterInput($_POST[$fam_custom_Field]);
+        $bErrorFlag |= !validateCustomField($customField->getTypeID(), $currentFieldData, $customField->getCustomField(), $aCustomErrors);
 
-        $bErrorFlag |= !validateCustomField($type_ID, $currentFieldData, $fam_custom_Field, $aCustomErrors);
-
-        // assign processed value locally to $aPersonProps so we can use it to generate the form later
-        $aCustomData[$fam_custom_Field] = $currentFieldData;
+        // Assign processed value locally so we can use it to generate the form later
+        $aCustomData[$customField->getCustomField()] = $currentFieldData;
     }
 
-    //If no errors, then let's update...
+    // If no errors, then let's update...
     if (!$bErrorFlag) {
         // Format the phone numbers before we store them
-        if (!$bNoFormat_HomePhone) {
+        // TODO: Change to $bFormat_HomePhone so the test is true (or replace it totally)
+        if ($bNoFormat_HomePhone === false) {
             $sHomePhone = CollapsePhoneNumber($sHomePhone, $sCountry);
         }
-        if (!$bNoFormat_WorkPhone) {
+
+        if ($bNoFormat_WorkPhone === false) {
             $sWorkPhone = CollapsePhoneNumber($sWorkPhone, $sCountry);
         }
-        if (!$bNoFormat_CellPhone) {
+
+        if ($bNoFormat_CellPhone === false) {
             $sCellPhone = CollapsePhoneNumber($sCellPhone, $sCountry);
         }
 
-        //Write the base SQL depending on the Action
+        // TODO: Do better than this
         $bSendNewsLetterString = $bSendNewsLetter ? 'TRUE' : 'FALSE';
 
-        $family = new \ChurchCRM\model\ChurchCRM\Family();
         if ($iFamilyID >= 1) {
-            $family = FamilyQuery::create()->findPk($iFamilyID);
+            $family = FamilyQuery::create()->findOneById($iFamilyID);
+        } else {
+            $family = new Family();
         }
+
         $family
             ->setName($sName)
             ->setAddress1($sAddress1)
@@ -252,289 +254,322 @@ if (isset($_POST['FamilySubmit']) || isset($_POST['FamilySubmitAndAdd'])) {
             ->setHomePhone($sHomePhone)
             ->setWorkPhone($sWorkPhone)
             ->setCellPhone($sCellPhone)
-            ->setDateEntered(date('YmdHis'))
-            ->setEnteredBy(AuthenticationManager::getCurrentUser()->getId())
-            ->setSendNewsletter($bSendNewsLetterString)
-            ->setEnvelope($nEnvelope);
-        if ($dWeddingDate) {
+            ->setDateEntered(date('YmdHis')) // TODO: Is there a better way to do this?
+            ->setEnteredBy(AuthenticationManager::getCurrentUser()->getId()) // TODO: Verify this works
+            ->setSendNewsletter($bSendNewsLetterString) // TODO: Is this a boolean or a string?
+            ->setEnvelope($nEnvelope); // TODO: What's this?
+
+        // $family->setDateLastEdited(new DateTime());
+        // $family->setEditedBy(AuthenticationManager::getCurrentUser()->getId());
+
+        if ($dWeddingDate) { // TODO: strangely it can be a string which contains sometimes "NULL" -- verify and debug
             $family->setWeddingdate($dWeddingDate);
         }
+
         if ($sEmail) {
             $family->setEmail($sEmail);
         }
+
         if ($nLatitude) {
             $family->setLatitude($nLatitude);
         }
+
         if ($nLatitude) {
             $family->setLongitude($nLongitude);
         }
+
         $family->save();
         $family->reload();
 
-        //If the user added a new record, we need to key back to the route to the FamilyView page
+        // If the user added a new record, we need to key back to the route to the FamilyView page
         if ($iFamilyID < 1) {
             $iFamilyID = $family->getId();
-            $sSQL = "INSERT INTO `family_custom` (`fam_ID`) VALUES ('" . $iFamilyID . "')";
-            RunQuery($sSQL);
+
+            $familyCustom = new FamilyCustom();
+            $familyCustom->setFamId($iFamilyID);
+            $familyCustom->save();
 
             // Add property if assigned
             if ($iPropertyID) {
-                $sSQL = "INSERT INTO record2property_r2p (r2p_pro_ID, r2p_record_ID) VALUES ($iPropertyID, $iFamilyID)";
-                RunQuery($sSQL);
+                $familyProperty = new RecordProperty(); // TODO: Verify if this and the next 2 lines are correct?
+                $familyProperty->setRecordId($iFamilyID);
+                $familyProperty->setPropertyId($iPropertyID);
+                $familyProperty->save();
             }
 
-            //Run through the family member arrays...
-            for ($iCount = 1; $iCount <= $iFamilyMemberRows; $iCount++) {
-                if (strlen($aFirstNames[$iCount]) > 0) {
-                    if (strlen($aBirthYears[$iCount]) < 4) {
-                        $aBirthYears[$iCount] = 'NULL';
+            // Run through the family member arrays...
+            for ($key = 1; $key <= $iFamilyMemberRows; $key++) {
+                if (strlen($aFirstNames[$key]) > 0) {
+                    if (strlen($aBirthYears[$key]) < 4) {
+                        $aBirthYears[$key] = '';
                     }
 
-                    //If no last name is entered for a member, use the family name.
-                    if (strlen($aLastNames[$iCount]) && $aLastNames[$iCount] != $sName) {
-                        $sLastNameToEnter = $aLastNames[$iCount];
+                    // If no last name is entered for a member, use the family name
+                    if (strlen($aLastNames[$key]) && $aLastNames[$key] != $sName) {
+                        $sLastNameToEnter = $aLastNames[$key];
                     } else {
                         $sLastNameToEnter = $sName;
                     }
 
                     $person = new Person();
                     $person
-                        ->setFirstName($aFirstNames[$iCount])
-                        ->setMiddleName($aMiddleNames[$iCount])
+                        ->setFirstName($aFirstNames[$key])
+                        ->setMiddleName($aMiddleNames[$key])
                         ->setLastName($sLastNameToEnter)
-                        ->setSuffix($aSuffix[$iCount])
+                        ->setSuffix($aSuffix[$key])
                         ->setFamId($iFamilyID)
-                        ->setFmrId($aRoles[$iCount])
+                        ->setFmrId($aRoles[$key])
+                        ->setGender($aGenders[$key])
+                        ->setBirthDay($aBirthDays[$key])
+                        ->setBirthMonth($aBirthMonths[$key])
+                        ->setBirthYear($aBirthYears[$key])
+                        ->setClsId($aClassification[$key])
                         ->setDateEntered(date('YmdHis'))
-                        ->setEnteredBy(AuthenticationManager::getCurrentUser()->getId())
-                        ->setGender($aGenders[$iCount])
-                        ->setBirthDay($aBirthDays[$iCount])
-                        ->setBirthMonth($aBirthMonths[$iCount])
-                        ->setBirthYear($aBirthYears[$iCount])
-                        ->setClsId($aClassification[$iCount]);
+                        ->setEnteredBy(AuthenticationManager::getCurrentUser()->getId());
                     $person->save();
                     $person->reload();
+
                     $dbPersonId = $person->getId();
+
                     $note = new Note();
                     $note->setPerId($dbPersonId);
                     $note->setText(gettext('Created via Family'));
                     $note->setType('create');
                     $note->setEntered(AuthenticationManager::getCurrentUser()->getId());
                     $note->save();
-                    RunQuery('LOCK TABLES person_custom WRITE');
-                    $sSQL = 'INSERT INTO person_custom (per_ID) VALUES ('
-                        . $dbPersonId . ')';
-                    RunQuery($sSQL);
-                    RunQuery('UNLOCK TABLES');
+
+                    $personCustom = new PersonCustom();
+                    $personCustom->setPerId($dbPersonId);
+                    $personCustom->save();
                 }
             }
-            $family = FamilyQuery::create()->findPk($iFamilyID);
+
+            $family = FamilyQuery::create()->findOneById($iFamilyID); // TODO: Why are we doing this again?
             $family->createTimeLineNote('create');
             $family->updateLanLng();
 
-            if (!empty(SystemConfig::getValue("sNewPersonNotificationRecipientIDs"))) {
+            if (strlen(SystemConfig::getValue("sNewPersonNotificationRecipientIDs")) > 0) {
                 $NotificationEmail = new NewPersonOrFamilyEmail($family);
-                if (!$NotificationEmail->send()) {
+                if ($NotificationEmail->send() === false) {
                     $logger->warning($NotificationEmail->getError());
                 }
             }
-        } else {
-            for ($iCount = 1; $iCount <= $iFamilyMemberRows; $iCount++) {
-                if (strlen($aFirstNames[$iCount]) > 0) {
-                    if (strlen($aBirthYears[$iCount]) < 4) {
-                        $aBirthYears[$iCount] = 'NULL';
+        } else { // TODO: And now we do it over again -- function?
+            for ($key = 1; $key <= $iFamilyMemberRows; $key++) {
+                if (strlen($aFirstNames[$key]) > 0) {
+                    if (strlen($aBirthYears[$key]) < 4) {
+                        $aBirthYears[$key] = '';
                     }
 
-                    //If no last name is entered for a member, use the family name.
-                    if (strlen($aLastNames[$iCount]) && $aLastNames[$iCount] != $sName) {
-                        $sLastNameToEnter = $aLastNames[$iCount];
+                    // If no last name is entered for a member, use the family name
+                    if (strlen($aLastNames[$key]) && $aLastNames[$key] != $sName) {
+                        $sLastNameToEnter = $aLastNames[$key];
                     } else {
                         $sLastNameToEnter = $sName;
                     }
-                    //RunQuery("LOCK TABLES person_per WRITE, person_custom WRITE");
-                    $person = PersonQuery::create()->findOneById($aPersonIDs[$iCount]);
+                    // TODO: sBirthYearScript ??
+                    $person = PersonQuery::create()->findOneById($aPersonIDs[$key]);
                     $person
-                        ->setFirstName($aFirstNames[$iCount])
-                        ->setMiddleName($aMiddleNames[$iCount])
-                        ->setLastName($aLastNames[$iCount])
-                        ->setSuffix($aSuffix[$iCount])
-                        ->setGender($aGenders[$iCount])
-                        ->setFmrId($aRoles[$iCount])
-                        ->setBirthMonth($aBirthMonths[$iCount])
-                        ->setBirthDay($aBirthDays[$iCount])
-                        ->setClsId($aClassification);
-                    if ($aUpdateBirthYear[$iCount] & 1) {
-                        $person->setBirthYear($aBirthYears[$iCount]);
+                        ->setFirstName($aFirstNames[$key])
+                        ->setMiddleName($aMiddleNames[$key])
+                        ->setLastName($aLastNames[$key])
+                        ->setSuffix($aSuffix[$key])
+                        ->setGender($aGenders[$key])
+                        ->setFmrId($aRoles[$key])
+                        ->setBirthDay($aBirthDays[$key])
+                        ->setBirthMonth($aBirthMonths[$key])
+                        ->setClsId($aClassification[$key]) // Key was missing !!
+                        ->setDateEntered(date('YmdHis'))
+                        ->setEnteredBy(AuthenticationManager::getCurrentUser()->getId());
+
+                    if ($aUpdateBirthYear[$key] & 1) {
+                        $person->setBirthYear($aBirthYears[$key]);
                     }
+
                     $person->save();
-                    //RunQuery("UNLOCK TABLES");
 
                     $note = new Note();
-                    $note->setPerId($aPersonIDs[$iCount]);
-                    $note->setText(gettext('Updated via Family'));
+                    $note->setPerId($aPersonIDs[$key]);
+                    $note->setText(gettext('Updated via Family')); // TODO: Why use gettext() here? Should be on the UI side.
                     $note->setType('edit');
                     $note->setEntered(AuthenticationManager::getCurrentUser()->getId());
                     $note->save();
                 }
             }
-            $family = FamilyQuery::create()->findPk($iFamilyID);
-            $family->updateLanLng();
+
+            // TODO: Confirm this is in the right place?
+            $family = FamilyQuery::create()->findById($iFamilyID);
             $family->createTimeLineNote('edit');
+            $family->updateLanLng();
         }
 
-        // Update the custom person fields.
+        // Update the custom person fields
         if ($numCustomFields > 0) {
             $sSQL = 'REPLACE INTO family_custom SET ';
-            mysqli_data_seek($rsCustomFields, 0);
 
-            while ($rowCustomField = mysqli_fetch_array($rsCustomFields, MYSQLI_BOTH)) {
-                extract($rowCustomField);
-                if (AuthenticationManager::getCurrentUser()->isEnabledSecurity($aSecurityType[$fam_custom_FieldSec])) {
-                    $currentFieldData = trim($aCustomData[$fam_custom_Field]);
+            foreach ($customFields as $customField) {
+                if (AuthenticationManager::getCurrentUser()->isEnabledSecurity($customField->getCustomFieldSec())) {
+                    $currentFieldData = trim($aCustomData[$customField->getCustomField()]);
 
-                    sqlCustomField($sSQL, $type_ID, $currentFieldData, $fam_custom_Field, $sCountry);
+                    sqlCustomField($sSQL, $customField->getTypeId(), $currentFieldData, $customField->getCustomField(), $sCountry);
                 }
             }
 
-            // chop off the last 2 characters (comma and space) added in the last while loop iteration.
+            // Chop off the last 2 characters (comma and space) added in the last while loop iteration
             $sSQL = mb_substr($sSQL, 0, -2);
 
             $sSQL .= ', fam_ID = ' . $iFamilyID;
 
-            //Execute the SQL
-            RunQuery($sSQL);
+            // TODO: Is there a better way to do this?
+            $connection = Propel::getConnection();
+            $statement = $connection->prepare($sSQL);
+            $statement->execute();
         }
 
-        //Which submit button did they press?
+        // Which submit button did they press?
         if (isset($_POST['FamilySubmit'])) {
-            //Send to the view of this person
+            // Redirect to the view of this person
             RedirectUtils::redirect('v2/family/' . $iFamilyID);
         } else {
-            //Reload to editor to add another record
-            RedirectUtils::redirect('FamilyEditor.php');
+            // Reload the editor to add another record
+            RedirectUtils::redirect('v2/family/editor');
         }
     }
 } else {
-    //FirstPass
-    //Are we editing or adding?
+    // First Pass
+    // Are we editing or adding?
     if ($iFamilyID > 0) {
-        //Editing....
-        //Get the information on this family
-        $sSQL = 'SELECT * FROM family_fam WHERE fam_ID = ' . $iFamilyID;
-        $rsFamily = RunQuery($sSQL);
-        extract(mysqli_fetch_array($rsFamily));
+        // Editing....
+        // Get the information on this family
+        $family = FamilyQuery::create()->findOneById($iFamilyID);
 
-        $iFamilyID = $fam_ID;
-        $sName = $fam_Name;
-        $sAddress1 = $fam_Address1;
-        $sAddress2 = $fam_Address2;
-        $sCity = $fam_City;
-        $sState = $fam_State;
-        $sZip = $fam_Zip;
-        $sCountry = $fam_Country;
-        $sHomePhone = $fam_HomePhone;
-        $sWorkPhone = $fam_WorkPhone;
-        $sCellPhone = $fam_CellPhone;
-        $sEmail = $fam_Email;
-        $bSendNewsLetter = ($fam_SendNewsLetter == 'TRUE');
-        $dWeddingDate = $fam_WeddingDate;
-        $nLatitude = $fam_Latitude;
-        $nLongitude = $fam_Longitude;
+        $iFamilyID = $family->getId();
+        $sName = $family->getName();
+        $sAddress1 = $family->getAddress1();
+        $sAddress2 = $family->getAddress2();
+        $sCity = $family->getCity();
+        $sState = $family->getState();
+        $sZip = $family->getZip();
+        $sCountry = $family->getCountry();
+        $sHomePhone = $family->getHomePhone();
+        $sWorkPhone = $family->getWorkPhone();
+        $sCellPhone = $family->getCellPhone();
+        $sEmail = $family->getEmail();
+        // TODO: Check what is in DB for this?
+        $bSendNewsLetter = ($family->getSendNewsletter() === true);
+        // TODO: Confirm not null a this point
+        $dWeddingDate = $family->getWeddingdate();
+        $nLatitude = $family->getLatitude();
+        $nLongitude = $family->getLongitude();
 
         // Expand the phone number
         $sHomePhone = ExpandPhoneNumber($sHomePhone, $sCountry, $bNoFormat_HomePhone);
         $sWorkPhone = ExpandPhoneNumber($sWorkPhone, $sCountry, $bNoFormat_WorkPhone);
         $sCellPhone = ExpandPhoneNumber($sCellPhone, $sCountry, $bNoFormat_CellPhone);
 
-        $sSQL = 'SELECT * FROM family_custom WHERE fam_ID = ' . $iFamilyID;
-        $rsCustomData = RunQuery($sSQL);
-        $aCustomData = mysqli_fetch_array($rsCustomData, MYSQLI_BOTH);
+        $familyCustom = FamilyCustomQuery::create()->findOneByFamId($iFamilyID);
+
+        $customData = FamilyCustomQuery::create();
+
+        foreach ($customFields as $customField) {
+            $customData->withColumn($customField->getCustomField());
+        }
+
+        if ($customData->findOneByFamId($iFamilyID) !== null) {
+            $aCustomData = $customData->findOneByFamId($iFamilyID)->toArray();
+        }
 
         $aCustomErrors = [];
 
         if ($numCustomFields > 0) {
-            mysqli_data_seek($rsCustomFields, 0);
-            while ($rowCustomField = mysqli_fetch_array($rsCustomFields, MYSQLI_BOTH)) {
-                $aCustomErrors[$rowCustomField['fam_custom_Field']] = false;
+            foreach ($customFields as $customField) {
+                $aCustomErrors[$customField->getCustomField()] = false;
             }
         }
 
-        $sSQL = 'SELECT * FROM person_per LEFT JOIN family_fam ON per_fam_ID = fam_ID WHERE per_fam_ID =' . $iFamilyID . ' ORDER BY per_fmr_ID';
-        $rsMembers = RunQuery($sSQL);
-        $iCount = 0;
+        $persons = PersonQuery::create()
+            ->leftJoinWithFamily()
+            ->orderByFmrId()
+            ->filterByDateDeactivated() // TODO: Double check on this?
+            ->findByFamId($iFamilyID);
+
+        $key = 0;
         $iFamilyMemberRows = 0;
-        while ($aRow = mysqli_fetch_array($rsMembers)) {
-            extract($aRow);
-            $iCount++;
+
+        // TODO: Do better!
+        foreach ($persons as $person) {
+            $key++;
             $iFamilyMemberRows++;
-            $aFirstNames[$iCount] = $per_FirstName;
-            $aMiddleNames[$iCount] = $per_MiddleName;
-            $aLastNames[$iCount] = $per_LastName;
-            $aSuffix[$iCount] = $per_Suffix;
-            $aGenders[$iCount] = $per_Gender;
-            $aRoles[$iCount] = $per_fmr_ID;
-            $aBirthMonths[$iCount] = $per_BirthMonth;
-            $aBirthDays[$iCount] = $per_BirthDay;
-            if ($per_BirthYear > 0) {
-                $aBirthYears[$iCount] = $per_BirthYear;
+
+            $aFirstNames[$key] = $person->getFirstName();
+            $aMiddleNames[$key] = $person->getMiddleName();
+            $aLastNames[$key] = $person->getLastName();
+            $aSuffix[$key] = $person->getSuffix();
+            $aGenders[$key] = $person->getGender();
+            $aRoles[$key] = $person->getFmrId();
+            $aBirthMonths[$key] = $person->getBirthMonth();
+            $aBirthDays[$key] = $person->getBirthDay();
+
+            if ($person->getBirthYear() > 0) {
+                $aBirthYears[$key] = $person->getBirthYear();
             } else {
-                $aBirthYears[$iCount] = '';
+                $aBirthYears[$key] = '';
             }
-            $aClassification[$iCount] = $per_cls_ID;
-            $aPersonIDs[$iCount] = $per_ID;
-            $aPerFlag[$iCount] = $per_Flags;
+
+            $aClassification[$key] = $person->getClsId();
+            $aPersonIDs[$key] = $person->getId();
+            $aPerFlag[$key] = $person->getFlags();
         }
     } else {
-        //Adding....
-        //Set defaults
+        // Adding...
+        // Set defaults
         $sCity = SystemConfig::getValue('sDefaultCity');
-        $sCountry = SystemConfig::getValue('sDefaultCountry');
         $sState = SystemConfig::getValue('sDefaultState');
+        $sCountry = SystemConfig::getValue('sDefaultCountry');
         $sZip = SystemConfig::getValue('sDefaultZip');
         $iClassification = '0';
         $iFamilyMemberRows = 6;
-
-        $iFamilyID = -1;
+        $iFamilyID = -1; // Set again?
         $sName = '';
         $sAddress1 = '';
         $sAddress2 = '';
         $sHomePhone = '';
-        $bNoFormat_HomePhone = isset($_POST['NoFormat_HomePhone']);
+        $bNoFormat_HomePhone = (isset($_POST['NoFormat_HomePhone']) && $_POST['NoFormat_HomePhone'] === 'on');
         $sWorkPhone = '';
-        $bNoFormat_WorkPhone = isset($_POST['NoFormat_WorkPhone']);
+        $bNoFormat_WorkPhone = (isset($_POST['NoFormat_WorkPhone']) && $_POST['NoFormat_WorkPhone'] === 'on');
         $sCellPhone = '';
-        $bNoFormat_CellPhone = isset($_POST['NoFormat_CellPhone']);
+        $bNoFormat_CellPhone = (isset($_POST['NoFormat_CellPhone']) && $_POST['NoFormat_CellPhone'] === 'on');
         $sEmail = '';
-        $bSendNewsLetter = 'TRUE';
+        $bSendNewsLetter = 'TRUE'; // TODO: Shouldn't this be false?
         $dWeddingDate = '';
         $nLatitude = 0.0;
         $nLongitude = 0.0;
 
-        //Loop through the Family Member 'quick entry' form fields
-        for ($iCount = 1; $iCount <= $iFamilyMemberRows; $iCount++) {
+        // Loop through the Family Member 'quick entry' form fields
+        for ($key = 1; $key <= $iFamilyMemberRows; $key++) {
             // Assign everything to arrays
-            $aFirstNames[$iCount] = '';
-            $aMiddleNames[$iCount] = '';
-            $aLastNames[$iCount] = '';
-            $aSuffix[$iCount] = '';
-            $aRoles[$iCount] = 0;
-            $aGenders[$iCount] = '';
-            $aBirthDays[$iCount] = 0;
-            $aBirthMonths[$iCount] = 0;
-            $aBirthYears[$iCount] = '';
-            $aClassification[$iCount] = 0;
-            $aPersonIDs[$iCount] = 0;
-            $aUpdateBirthYear[$iCount] = 0;
+            // TODO: This feels like defaults that are best set elsewhere
+            $aFirstNames[$key] = '';
+            $aMiddleNames[$key] = '';
+            $aLastNames[$key] = '';
+            $aSuffix[$key] = '';
+            $aRoles[$key] = 0;
+            $aGenders[$key] = '';
+            $aBirthDays[$key] = 0;
+            $aBirthMonths[$key] = 0;
+            $aBirthYears[$key] = '';
+            $aClassification[$key] = 0;
+            $aPersonIDs[$key] = 0;
+            $aUpdateBirthYear[$key] = 0;
         }
 
         $aCustomData = [];
         $aCustomErrors = [];
+
         if ($numCustomFields > 0) {
-            mysqli_data_seek($rsCustomFields, 0);
-            while ($rowCustomField = mysqli_fetch_array($rsCustomFields, MYSQLI_BOTH)) {
-                extract($rowCustomField);
-                $aCustomData[$fam_custom_Field] = '';
-                $aCustomErrors[$fam_custom_Field] = false;
+            foreach ($customFields as $customField) {
+                $aCustomData[$customField->getCustomField()] = '';
+                $aCustomErrors[$customField->getCustomField()] = false;
             }
         }
     }
@@ -560,8 +595,8 @@ require 'Include/Header.php';
                         <label><?= gettext('Family Name') ?>:</label>
                         <input type="text" Name="Name" id="FamilyName" value="<?= htmlentities(stripslashes($sName), ENT_NOQUOTES, 'UTF-8') ?>" maxlength="48" class="form-control">
                         <?php if ($sNameError) {
-                        ?><span style="color: red;"><?= $sNameError ?></span><?php
-                                                                                } ?>
+                            ?><span style="color: red;"><?= $sNameError ?></span><?php
+                        } ?>
                     </div>
                 </div>
                 <p />
@@ -593,10 +628,10 @@ require 'Include/Header.php';
                     <div class="form-group col-md-3">
                         <label><?= gettext('Zip') ?>:</label>
                         <input type="text" Name="Zip" class="form-control" <?php
-                                                                            if (SystemConfig::getBooleanValue('bForceUppercaseZip')) {
-                                                                                echo 'style="text-transform:uppercase" ';
-                                                                            }
-                                                                            echo 'value="' . htmlentities(stripslashes($sZip), ENT_NOQUOTES, 'UTF-8') . '" '; ?> maxlength="10" size="8">
+                        if (SystemConfig::getBooleanValue('bForceUppercaseZip')) {
+                            echo 'style="text-transform:uppercase" ';
+                        }
+                        echo 'value="' . htmlentities(stripslashes($sZip), ENT_NOQUOTES, 'UTF-8') . '" '; ?> maxlength="10" size="8">
                     </div>
                     <div class="form-group col-md-3">
                         <label> <?= gettext('Country') ?>:</label>
@@ -604,22 +639,19 @@ require 'Include/Header.php';
                         </select>
                     </div>
                 </div>
-                <?php if (!SystemConfig::getValue('bHideLatLon')) { /* Lat/Lon can be hidden - General Settings */
-                    if (!$bHaveXML) { // No point entering if values will just be overwritten
-                ?>
-                        <div class="row">
-                            <div class="form-group col-md-3">
-                                <label><?= gettext('Latitude') ?>:</label>
-                                <input type="text" class="form-control" Name="Latitude" value="<?= $nLatitude ?>" size="30" maxlength="50">
-                            </div>
-                            <div class="form-group col-md-3">
-                                <label><?= gettext('Longitude') ?>:</label>
-                                <input type="text" class="form-control" Name="Longitude" value="<?= $nLongitude ?>" size="30" maxlength="50">
-                            </div>
-                        </div>
-                <?php
-                    }
-                } /* Lat/Lon can be hidden - General Settings */ ?>
+                <?php if (SystemConfig::getValue('bHideLatLon') === false) { ?>
+                <div class="row">
+                    <div class="form-group col-md-3">
+                        <label><?= gettext('Latitude') ?>:</label>
+                        <input type="text" class="form-control" Name="Latitude" value="<?= $nLatitude ?>" size="30" maxlength="50">
+                    </div>
+                    <div class="form-group col-md-3">
+                        <label><?= gettext('Longitude') ?>:</label>
+                        <input type="text" class="form-control" Name="Longitude" value="<?= $nLongitude ?>" size="30" maxlength="50">
+                    </div>
+                </div>
+                    <?php
+                } ?>
             </div>
         </div>
     </div>
@@ -639,9 +671,7 @@ require 'Include/Header.php';
                             <i class="fa fa-phone"></i>
                         </div>
                         <input type="text" Name="HomePhone" value="<?= htmlentities(stripslashes($sHomePhone)) ?>" size="30" maxlength="30" class="form-control" data-inputmask='"mask": "<?= SystemConfig::getValue('sPhoneFormat') ?>"' data-mask>
-                        <input type="checkbox" name="NoFormat_HomePhone" value="1" <?php if ($bNoFormat_HomePhone) {
-                                                                                        echo ' checked';
-                                                                                    } ?>><?= gettext('Do not auto-format') ?>
+                        <input type="checkbox" name="NoFormat_HomePhone" <?php $bNoFormat_HomePhone ? ' checked' : '' ?>><?= gettext('Do not auto-format') ?>
                     </div>
                 </div>
                 <div class="form-group col-md-6">
@@ -651,7 +681,7 @@ require 'Include/Header.php';
                             <i class="fa fa-phone"></i>
                         </div>
                         <input type="text" name="WorkPhone" value="<?= htmlentities(stripslashes($sWorkPhone)) ?>" size="30" maxlength="30" class="form-control" data-inputmask='"mask": "<?= SystemConfig::getValue('sPhoneFormatWithExt') ?>"' data-mask />
-                        <input type="checkbox" name="NoFormat_WorkPhone" value="1" <?= $bNoFormat_WorkPhone ? ' checked' : '' ?>><?= gettext('Do not auto-format') ?>
+                        <input type="checkbox" name="NoFormat_WorkPhone" <?= $bNoFormat_WorkPhone ? ' checked' : '' ?>><?= gettext('Do not auto-format') ?>
                     </div>
                 </div>
                 <div class="form-group col-md-6">
@@ -661,7 +691,7 @@ require 'Include/Header.php';
                             <i class="fa fa-phone"></i>
                         </div>
                         <input type="text" name="CellPhone" value="<?= htmlentities(stripslashes($sCellPhone)) ?>" size="30" maxlength="30" class="form-control" data-inputmask='"mask": "<?= SystemConfig::getValue('sPhoneFormatCell') ?>"' data-mask>
-                        <input type="checkbox" name="NoFormat_CellPhone" value="1" <?= $bNoFormat_CellPhone ? ' checked' : '' ?>><?= gettext('Do not auto-format') ?>
+                        <input type="checkbox" name="NoFormat_CellPhone" <?= $bNoFormat_CellPhone ? ' checked' : '' ?>><?= gettext('Do not auto-format') ?>
                     </div>
                 </div>
             </div>
@@ -675,14 +705,14 @@ require 'Include/Header.php';
                         <input type="text" Name="Email" class="form-control" value="<?= htmlentities(stripslashes($sEmail)) ?>" size="30" maxlength="100"><span style="color: red;"><?php echo '<BR>' . $sEmailError ?></span>
                     </div>
                 </div>
-                <?php if (!SystemConfig::getValue('bHideFamilyNewsletter')) { /* Newsletter can be hidden - General Settings */ ?>
+                <?php if (SystemConfig::getValue('bHideFamilyNewsletter') === false) { /* Newsletter can be hidden - General Settings */ ?>
                     <div class="form-group col-md-4">
                         <label><?= gettext('Send Newsletter') ?>:</label><br />
                         <input type="checkbox" Name="SendNewsLetter" value="1" <?php if ($bSendNewsLetter) {
                                                                                     echo ' checked';
-                                                                                } ?>>
+                                                                               } ?>>
                     </div>
-                <?php
+                    <?php
                 } ?>
             </div>
         </div>
@@ -695,7 +725,7 @@ require 'Include/Header.php';
             </div>
         </div><!-- /.box-header -->
         <div class="card-body">
-            <?php if (!SystemConfig::getValue('bHideWeddingDate')) { /* Wedding Date can be hidden - General Settings */
+            <?php if (SystemConfig::getValue('bHideWeddingDate') === false) { /* Wedding Date can be hidden - General Settings */
                 if (empty($dWeddingDate)) {
                     $dWeddingDate = '';
                 } ?>
@@ -704,15 +734,16 @@ require 'Include/Header.php';
                         <label><?= gettext('Wedding Date') ?>:</label>
                         <input type="text" class="form-control date-picker" Name="WeddingDate" value="<?= change_date_for_place_holder($dWeddingDate) ?>" maxlength="12" id="WeddingDate" size="15" placeholder="<?= SystemConfig::getValue("sDatePickerPlaceHolder") ?>">
                         <?php if ($sWeddingDateError) {
-                        ?> <span style="color: red"><br /><?php $sWeddingDateError ?></span> <?php
-                                                                                                } ?>
+                            ?> <span style="color: red"><br /><?php $sWeddingDateError ?></span> <?php
+                        } ?>
                     </div>
                 </div>
-            <?php
+                <?php
             } /* Wedding date can be hidden - General Settings */ ?>
         </div>
     </div>
-    <?php if (SystemConfig::getValue('bUseDonationEnvelopes')) { /* Donation envelopes can be hidden - General Settings */ ?>
+    <?php if (SystemConfig::getValue('bUseDonationEnvelopes')) { /* Donation envelopes can be hidden - General Settings */
+        /* TODO: Why is this true and the others are false -- should be consistent. */ ?>
         <div class="card card-info clearfix">
             <div class="card-header">
                 <h3><?= gettext('Envelope Info') ?></h3>
@@ -726,14 +757,258 @@ require 'Include/Header.php';
                         <label><?= gettext('Envelope Number') ?>:</label>
                         <input type="text" Name="Envelope" <?php if ($fam_Envelope) {
                                                                 echo ' value="' . $fam_Envelope;
-                                                            } ?>" size="30" maxlength="50">
+                                                           } ?>" size="30" maxlength="50">
                     </div>
                 </div>
             </div>
         </div>
-    <?php
+        <?php
     }
     if ($numCustomFields > 0) {
+        ?>
+    <div class="card card-info clearfix">
+        <div class="card-header">
+            <h3 class="card-title"><?= gettext('Custom Fields') ?></h3>
+            <div class="card-tools">
+                <input type="submit" class="btn btn-primary" value="<?= gettext('Save') ?>" name="FamilySubmit">
+            </div>
+        </div><!-- /.box-header -->
+        <div class="card-body">
+        <?php if ($numCustomFields > 0) {
+            for ($i = 0; $i < $maxCustomFields; $i++) {
+                if (AuthenticationManager::getCurrentUser()->isEnabledSecurity($aSecurityType[$fam_custom_FieldSec])) {
+                    ?>
+                <div class="row">
+                    <div class="form-group col-md-4">
+                    <label><?= $$customField['CustomName']  ?> </label>
+                    <?php
+                    if (array_key_exists($customField['CustomField'], $aCustomData)) {
+                        $currentFieldData = trim($aCustomData[$customField['CustomField']]);
+                    } else {
+                        $currentFieldData = '';
+                    }
+
+                    if ($customField['TypeId'] == 11) { // TODO: What is this? Potentially it's a phone number?
+                        $fam_custom_Special = $sCountry;
+                    } else {
+                        $fam_custom_Special = $customField['CustomSpecial']; // TODO: What's this and are we keeping it?
+                    }
+
+                    formCustomField($customField['TypeId'], $customField['CustomField'], $currentFieldData, $fam_custom_Special, !isset($_POST['FamilySubmit']));
+                    echo '<span style="color: red; ">' . $aCustomErrors[$customField['TypeId']] . '</span>';
+                    echo '</div></div>';
+                }
+            }
+        } ?>
+        </div>
+    </div>
+        <?php
+    } ?>
+    <div class="card card-info clearfix">
+        <div class="card-header">
+            <h3 class="card-title"><?= gettext('Family Members') ?></h3>
+            <div class="card-tools">
+                <input type="submit" class="btn btn-primary" value="<?= gettext('Save') ?>" name="FamilySubmit">
+            </div>
+        </div><!-- /.box-header -->
+        <div class="card-body">
+
+    <?php if ($iFamilyMemberRows > 0) {
+        ?>
+
+    <tr>
+        <td colspan="2">
+        <div class="MediumText">
+            <center><?= $iFamilyID < 0 ? gettext('You may create family members now or add them later.  All entries will become <i>new</i> person records.') : '' ?></center>
+        </div><br><br>
+            <div class="table-responsive">
+        <table cellpadding="3" cellspacing="0" width="100%">
+        <thead>
+        <tr class="TableHeader" align="center">
+            <th><?= gettext('First') ?></th>
+            <th><?= gettext('Middle') ?></th>
+            <th><?= gettext('Last') ?></th>
+            <th><?= gettext('Suffix') ?></th>
+            <th><?= gettext('Gender') ?></th>
+            <th><?= gettext('Role') ?></th>
+            <th><?= gettext('Birth Month') ?></th>
+            <th><?= gettext('Birth Day') ?></th>
+            <th><?= gettext('Birth Year') ?></th>
+            <th><?= gettext('Classification') ?></th>
+        </tr>
+        </thead>
+        <?php
+
+        // Get family roles
+        $rsFamilyRoles = ListOptionQuery::create()->orderByOptionSequence()->findById(2);
+        $numFamilyRoles = $rsFamilyRoles->count();
+
+        $c = 1;
+
+        foreach ($rsFamilyRoles as $rsFamilyRole) {
+            $aFamilyRoleNames[$c] = $rsFamilyRole->getOptionName();
+            $aFamilyRoleIDs[$c++] = $rsFamilyRole->getOptionName();
+        }
+
+        for ($key = 1; $key <= $iFamilyMemberRows; $key++) {
+            ?>
+        <input type="hidden" name="PersonID<?= $key ?>" value="<?= $aPersonIDs[$key] ?>">
+        <tr>
+            <td class="TextColumn">
+                <input name="FirstName<?= $key ?>" type="text" value="<?= $aFirstNames[$key] ?>" size="10">
+                <div><span style="color: red;"><?php if (array_key_exists($key, $aFirstNameError)) {
+                    echo $aFirstNameError[$key];
+                                               } ?></span></div>
+            </td>
+            <td class="TextColumn">
+                <input name="MiddleName<?= $key ?>" type="text" value="<?= $aMiddleNames[$key] ?>" size="10">
+            </td>
+            <td class="TextColumn">
+                <input name="LastName<?= $key ?>" type="text" value="<?= $aLastNames[$key] ?>" size="10">
+            </td>
+            <td class="TextColumn">
+                <input name="Suffix<?= $key ?>" type="text" value="<?= $aSuffix[$key] ?>" size="10">
+            </td>
+            <td class="TextColumn">
+                <select name="Gender<?php echo $key ?>">
+                    <option value="0" <?php if ($aGenders[$key] == 0) {
+                        echo 'selected';
+                                      } ?> ><?= gettext('Select Gender') ?></option>
+                    <option value="1" <?php if ($aGenders[$key] == 1) {
+                        echo 'selected';
+                                      } ?> ><?= gettext('Male') ?></option>
+                    <option value="2" <?php if ($aGenders[$key] == 2) {
+                        echo 'selected';
+                                      } ?> ><?= gettext('Female') ?></option>
+                </select>
+            </td>
+
+            <td class="TextColumn">
+                <select name="Role<?php echo $key ?>">
+                    <option value="0" <?php if ($aRoles[$key] == 0) {
+                        echo 'selected';
+                                      } ?> ><?= gettext('Select Role') ?></option>
+                <?php
+                //Build the role select box
+                for ($c = 1; $c <= $numFamilyRoles; $c++) {
+                    echo '<option value="' . $aFamilyRoleIDs[$c] . '"';
+                    if ($aRoles[$key] == $aFamilyRoleIDs[$c]) {
+                        echo ' selected';
+                    }
+                    echo '>' . $aFamilyRoleNames[$c] . '</option>';
+                } ?>
+                </select>
+            </td>
+            <td class="TextColumn">
+                <select name="BirthMonth<?php echo $key ?>">
+                    <option value="0" <?php if ($aBirthMonths[$key] == 0) {
+                        echo 'selected';
+                                      } ?>><?= gettext('Unknown') ?></option>
+                    <option value="01" <?php if ($aBirthMonths[$key] == 1) {
+                        echo 'selected';
+                                       } ?>><?= gettext('January') ?></option>
+                    <option value="02" <?php if ($aBirthMonths[$key] == 2) {
+                        echo 'selected';
+                                       } ?>><?= gettext('February') ?></option>
+                    <option value="03" <?php if ($aBirthMonths[$key] == 3) {
+                        echo 'selected';
+                                       } ?>><?= gettext('March') ?></option>
+                    <option value="04" <?php if ($aBirthMonths[$key] == 4) {
+                        echo 'selected';
+                                       } ?>><?= gettext('April') ?></option>
+                    <option value="05" <?php if ($aBirthMonths[$key] == 5) {
+                        echo 'selected';
+                                       } ?>><?= gettext('May') ?></option>
+                    <option value="06" <?php if ($aBirthMonths[$key] == 6) {
+                        echo 'selected';
+                                       } ?>><?= gettext('June') ?></option>
+                    <option value="07" <?php if ($aBirthMonths[$key] == 7) {
+                        echo 'selected';
+                                       } ?>><?= gettext('July') ?></option>
+                    <option value="08" <?php if ($aBirthMonths[$key] == 8) {
+                        echo 'selected';
+                                       } ?>><?= gettext('August') ?></option>
+                    <option value="09" <?php if ($aBirthMonths[$key] == 9) {
+                        echo 'selected';
+                                       } ?>><?= gettext('September') ?></option>
+                    <option value="10" <?php if ($aBirthMonths[$key] == 10) {
+                        echo 'selected';
+                                       } ?>><?= gettext('October') ?></option>
+                    <option value="11" <?php if ($aBirthMonths[$key] == 11) {
+                        echo 'selected';
+                                       } ?>><?= gettext('November') ?></option>
+                    <option value="12" <?php if ($aBirthMonths[$key] == 12) {
+                        echo 'selected';
+                                       } ?>><?= gettext('December') ?></option>
+                </select>
+            </td>
+            <td class="TextColumn">
+                <select name="BirthDay<?= $key ?>">
+                    <option value="0"><?= gettext('Unk')?></option>
+                    <?php for ($x = 1; $x < 32; $x++) {
+                        if ($x < 10) {
+                            $sDay = '0' . $x;
+                        } else {
+                            $sDay = $x;
+                        } ?>
+                    <option value="<?= $sDay ?>" <?php if ($aBirthDays[$key] == $x) {
+                        echo 'selected';
+                                   } ?>><?= $x ?></option>
+                        <?php
+                    } ?>
+                </select>
+            </td>
+            <td class="TextColumn">
+            <?php	if (!array_key_exists($key, $aperFlags) || !$aperFlags[$key]) {
+                    $UpdateBirthYear = 1; ?>
+                <input name="BirthYear<?= $key ?>" type="text" value="<?= $aBirthYears[$key] ?>" size="4" maxlength="4">
+                <div><span style="color: red;"><?php if (array_key_exists($key, $aBirthDateError)) {
+                        echo $aBirthDateError[$key];
+                                               } ?></span></div>
+                <?php
+            } else {
+                $UpdateBirthYear = 0;
+            } ?>
+            </td>
+            <td>
+                <select name="Classification<?php echo $key ?>">
+                    <option value="0" <?php if ($aClassification[$key] == 0) {
+                        echo 'selected';
+                                      } ?>><?= gettext('Unassigned') ?></option>
+                    <option value="" disabled>-----------------------</option>
+                    <?php
+                    // Get Classifications for the drop-down
+                    $rsClassifications = ListOptionQuery::create()->orderByOptionSequence()->findById(1);
+
+                    // Display Classifications
+                    foreach ($rsClassifications as $rsClassification) {
+                        echo '<option value="' . $rsClassification->getOptionId() . '"';
+                        if ($aClassification[$key] == $rsClassification->getOptionId()) {
+                            echo ' selected';
+                        }
+                        echo '>' . $rsClassification->getOptionName() . '&nbsp;';
+                    }
+                    echo '</select></td></tr>';
+        }
+        echo '</table></div>';
+
+        echo '</div></div>';
+    }
+
+    echo '<td colspan="2" align="center">';
+    echo '<input type="hidden" Name="UpdateBirthYear" value="' . $UpdateBirthYear . '">';
+
+    echo '<input type="submit" class="btn btn-primary" value="' . gettext('Save') . '" Name="FamilySubmit" id="FamilySubmitBottom"> ';
+    if (AuthenticationManager::getCurrentUser()->isAddRecordsEnabled()) {
+        echo ' <input type="submit" class="btn btn-info" value="' . gettext('Save and Add') . '" name="FamilySubmitAndAdd"> ';
+    }
+    echo ' <input type="button" class="btn btn-default" value="' . gettext('Cancel') . '" Name="FamilyCancel"';
+    if ($iFamilyID > 0) {
+        echo " onclick=\"javascript:document.location='v2/family/$iFamilyID';\">";
+    } else {
+        echo " onclick=\"javascript:document.location='" . SystemURLs::getRootPath() . "/v2/family';\">";
+    }
+    echo '</td></tr></form></table>';
     ?>
         <div class="card card-info clearfix">
             <div class="card-header">
@@ -743,29 +1018,27 @@ require 'Include/Header.php';
                 </div>
             </div><!-- /.box-header -->
             <div class="card-body">
-                <?php mysqli_data_seek($rsCustomFields, 0);
-                while ($rowCustomField = mysqli_fetch_array($rsCustomFields, MYSQLI_BOTH)) {
-                    extract($rowCustomField);
-                    if (AuthenticationManager::getCurrentUser()->isEnabledSecurity($aSecurityType[$fam_custom_FieldSec])) {
-                ?>
-                        <div class="row">
-                            <div class="form-group col-md-4">
-                                <label><?= $fam_custom_Name  ?> </label>
-                        <?php $currentFieldData = trim($aCustomData[$fam_custom_Field]);
+                <?php if ($numCustomFields > 0) {
+                    for ($i = 0; $i < $maxCustomFields; $i++) {
+                        if (AuthenticationManager::getCurrentUser()->isEnabledSecurity($aSecurityType[$fam_custom_FieldSec])) {
+                            ?>
+                            <div class="row">
+                                <div class="form-group col-md-4">
+                                    <label><?= $fam_custom_Name  ?> </label>
+                            <?php $currentFieldData = trim($aCustomData[$fam_custom_Field]);
 
-                        if ($type_ID == 11) {
-                            $fam_custom_Special = $sCountry;
+                            if ($type_ID == 11) {
+                                $fam_custom_Special = $sCountry;
+                            }
+
+                            formCustomField($type_ID, $fam_custom_Field, $currentFieldData, $fam_custom_Special, !isset($_POST['FamilySubmit']));
+                            echo '<span style="color: red; ">' . $aCustomErrors[$fam_custom_Field] . '</span>';
+                            echo '</div></div>';
                         }
-
-                        formCustomField($type_ID, $fam_custom_Field, $currentFieldData, $fam_custom_Special, !isset($_POST['FamilySubmit']));
-                        echo '<span style="color: red; ">' . $aCustomErrors[$fam_custom_Field] . '</span>';
-                        echo '</div></div>';
                     }
                 } ?>
                             </div>
                         </div>
-                    <?php
-                } ?>
                     <div class="card card-info clearfix">
                         <div class="card-header">
                             <h3 class="card-title"><?= gettext('Family Members') ?></h3>
@@ -776,8 +1049,7 @@ require 'Include/Header.php';
                         <div class="card-body">
 
                             <?php if ($iFamilyMemberRows > 0) {
-                            ?>
-
+                                ?>
                                 <tr>
                                     <td colspan="2">
                                         <div class="MediumText">
@@ -802,25 +1074,25 @@ require 'Include/Header.php';
                                                 <?php
 
                                                 //Get family roles
-                                                $sSQL = 'SELECT * FROM list_lst WHERE lst_ID = 2 ORDER BY lst_OptionSequence';
-                                                $rsFamilyRoles = RunQuery($sSQL);
-                                                $numFamilyRoles = mysqli_num_rows($rsFamilyRoles);
-                                                for ($c = 1; $c <= $numFamilyRoles; $c++) {
-                                                    $aRow = mysqli_fetch_array($rsFamilyRoles);
-                                                    extract($aRow);
-                                                    $aFamilyRoleNames[$c] = $lst_OptionName;
-                                                    $aFamilyRoleIDs[$c] = $lst_OptionID;
+                                                $rsFamilyRoles = ListOptionQuery::create()->orderByOptionSequence()->findById(2);
+
+                                                $c = 1;
+
+                                                foreach ($rsFamilyRoles as $rsFamilyRole) {
+                                                    $aFamilyRoleNames[$c] = $rsFamilyRole->getOptionName();
+                                                    // TODO: Don't like this -- find a better way
+                                                    $aFamilyRoleIDs[$c++] = $rsFamilyRole->getOptionId();
                                                 }
 
                                                 for ($iCount = 1; $iCount <= $iFamilyMemberRows; $iCount++) {
-                                                ?>
+                                                    ?>
                                                     <input type="hidden" name="PersonID<?= $iCount ?>" value="<?= $aPersonIDs[$iCount] ?>">
                                                     <tr>
                                                         <td class="TextColumn">
                                                             <input name="FirstName<?= $iCount ?>" type="text" value="<?= $aFirstNames[$iCount] ?>" size="10">
                                                             <div><span style="color: red;"><?php if (array_key_exists($iCount, $aFirstNameError)) {
                                                                                                 echo $aFirstNameError[$iCount];
-                                                                                            } ?></span></div>
+                                                                                           } ?></span></div>
                                                         </td>
                                                         <td class="TextColumn">
                                                             <input name="MiddleName<?= $iCount ?>" type="text" value="<?= $aMiddleNames[$iCount] ?>" size="10">
@@ -835,13 +1107,13 @@ require 'Include/Header.php';
                                                             <select name="Gender<?php echo $iCount ?>">
                                                                 <option value="0" <?php if ($aGenders[$iCount] == 0) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('Select Gender') ?></option>
+                                                                                  } ?>><?= gettext('Select Gender') ?></option>
                                                                 <option value="1" <?php if ($aGenders[$iCount] == 1) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('Male') ?></option>
+                                                                                  } ?>><?= gettext('Male') ?></option>
                                                                 <option value="2" <?php if ($aGenders[$iCount] == 2) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('Female') ?></option>
+                                                                                  } ?>><?= gettext('Female') ?></option>
                                                             </select>
                                                         </td>
 
@@ -849,9 +1121,10 @@ require 'Include/Header.php';
                                                             <select name="Role<?php echo $iCount ?>">
                                                                 <option value="0" <?php if ($aRoles[$iCount] == 0) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('Select Role') ?></option>
+                                                                                  } ?>><?= gettext('Select Role') ?></option>
                                                                 <?php
-                                                                //Build the role select box
+                                                                $numFamilyRoles = $rsFamilyRoles->count();
+                                                                // Build the role select box
                                                                 for ($c = 1; $c <= $numFamilyRoles; $c++) {
                                                                     echo '<option value="' . $aFamilyRoleIDs[$c] . '"';
                                                                     if ($aRoles[$iCount] == $aFamilyRoleIDs[$c]) {
@@ -865,43 +1138,43 @@ require 'Include/Header.php';
                                                             <select name="BirthMonth<?php echo $iCount ?>">
                                                                 <option value="0" <?php if ($aBirthMonths[$iCount] == 0) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('Unknown') ?></option>
+                                                                                  } ?>><?= gettext('Unknown') ?></option>
                                                                 <option value="01" <?php if ($aBirthMonths[$iCount] == 1) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('January') ?></option>
+                                                                                   } ?>><?= gettext('January') ?></option>
                                                                 <option value="02" <?php if ($aBirthMonths[$iCount] == 2) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('February') ?></option>
+                                                                                   } ?>><?= gettext('February') ?></option>
                                                                 <option value="03" <?php if ($aBirthMonths[$iCount] == 3) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('March') ?></option>
+                                                                                   } ?>><?= gettext('March') ?></option>
                                                                 <option value="04" <?php if ($aBirthMonths[$iCount] == 4) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('April') ?></option>
+                                                                                   } ?>><?= gettext('April') ?></option>
                                                                 <option value="05" <?php if ($aBirthMonths[$iCount] == 5) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('May') ?></option>
+                                                                                   } ?>><?= gettext('May') ?></option>
                                                                 <option value="06" <?php if ($aBirthMonths[$iCount] == 6) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('June') ?></option>
+                                                                                   } ?>><?= gettext('June') ?></option>
                                                                 <option value="07" <?php if ($aBirthMonths[$iCount] == 7) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('July') ?></option>
+                                                                                   } ?>><?= gettext('July') ?></option>
                                                                 <option value="08" <?php if ($aBirthMonths[$iCount] == 8) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('August') ?></option>
+                                                                                   } ?>><?= gettext('August') ?></option>
                                                                 <option value="09" <?php if ($aBirthMonths[$iCount] == 9) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('September') ?></option>
+                                                                                   } ?>><?= gettext('September') ?></option>
                                                                 <option value="10" <?php if ($aBirthMonths[$iCount] == 10) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('October') ?></option>
+                                                                                   } ?>><?= gettext('October') ?></option>
                                                                 <option value="11" <?php if ($aBirthMonths[$iCount] == 11) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('November') ?></option>
+                                                                                   } ?>><?= gettext('November') ?></option>
                                                                 <option value="12" <?php if ($aBirthMonths[$iCount] == 12) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('December') ?></option>
+                                                                                   } ?>><?= gettext('December') ?></option>
                                                             </select>
                                                         </td>
                                                         <td class="TextColumn">
@@ -915,8 +1188,8 @@ require 'Include/Header.php';
                                                                     } ?>
                                                                     <option value="<?= $sDay ?>" <?php if ($aBirthDays[$iCount] == $x) {
                                                                                                         echo 'selected';
-                                                                                                    } ?>><?= $x ?></option>
-                                                                <?php
+                                                                                   } ?>><?= $x ?></option>
+                                                                    <?php
                                                                 } ?>
                                                             </select>
                                                         </td>
@@ -926,8 +1199,8 @@ require 'Include/Header.php';
                                                                 <input name="BirthYear<?= $iCount ?>" type="text" value="<?= $aBirthYears[$iCount] ?>" size="4" maxlength="4">
                                                                 <div><span style="color: red;"><?php if (array_key_exists($iCount, $aBirthDateError)) {
                                                                                                     echo $aBirthDateError[$iCount];
-                                                                                                } ?></span></div>
-                                                            <?php
+                                                                                               } ?></span></div>
+                                                                    <?php
                                                             } else {
                                                                 $UpdateBirthYear = 0;
                                                             } ?>
@@ -936,44 +1209,42 @@ require 'Include/Header.php';
                                                             <select name="Classification<?php echo $iCount ?>">
                                                                 <option value="0" <?php if ($aClassification[$iCount] == 0) {
                                                                                         echo 'selected';
-                                                                                    } ?>><?= gettext('Unassigned') ?></option>
+                                                                                  } ?>><?= gettext('Unassigned') ?></option>
                                                                 <option value="" disabled>-----------------------</option>
                                                         <?php
-                                                        //Get Classifications for the drop-down
-                                                        $sSQL = 'SELECT * FROM list_lst WHERE lst_ID = 1 ORDER BY lst_OptionSequence';
-                                                        $rsClassifications = RunQuery($sSQL);
+                                                        // Get Classifications for the drop-down
+                                                        $rsClassifications = ListOptionQuery::create()->orderByOptionSequence()->findById(1);
 
                                                         //Display Classifications
-                                                        while ($aRow = mysqli_fetch_array($rsClassifications)) {
-                                                            extract($aRow);
-                                                            echo '<option value="' . $lst_OptionID . '"';
-                                                            if ($aClassification[$iCount] == $lst_OptionID) {
+                                                        foreach ($rsClassifications as $rsClassification) {
+                                                            echo '<option value="' . $rsClassification->getOptionId() . '"';
+                                                            if ($aClassification[$iCount] == $rsClassification->getOptionId()) {
                                                                 echo ' selected';
                                                             }
-                                                            echo '>' . $lst_OptionName . '&nbsp;';
+                                                            echo '>' . $rsClassification->getOptionName() . '&nbsp;';
                                                         }
                                                         echo '</select></td></tr>';
-                                                    }
-                                                    echo '</table></div>';
-
-                                                    echo '</div></div>';
                                                 }
+                                                echo '</table></div>';
 
-                                                echo '<td colspan="2" align="center">';
-                                                echo '<input type="hidden" Name="UpdateBirthYear" value="' . $UpdateBirthYear . '">';
+                                                echo '</div></div>';
+                            }
 
-                                                echo '<input type="submit" class="btn btn-primary" value="' . gettext('Save') . '" Name="FamilySubmit" id="FamilySubmitBottom"> ';
-                                                if (AuthenticationManager::getCurrentUser()->isAddRecordsEnabled()) {
-                                                    echo ' <input type="submit" class="btn btn-info" value="' . gettext('Save and Add') . '" name="FamilySubmitAndAdd"> ';
-                                                }
-                                                echo ' <input type="button" class="btn btn-default" value="' . gettext('Cancel') . '" Name="FamilyCancel"';
-                                                if ($iFamilyID > 0) {
-                                                    echo " onclick=\"javascript:document.location='v2/family/$iFamilyID';\">";
-                                                } else {
-                                                    echo " onclick=\"javascript:document.location='" . SystemURLs::getRootPath() . "/v2/family';\">";
-                                                }
-                                                echo '</td></tr></form></table>';
-                                                        ?>
-                                                        <script src="<?= SystemURLs::getRootPath() ?>/skin/js/FamilyEditor.js"></script>
+                            echo '<td colspan="2" align="center">';
+                            echo '<input type="hidden" Name="UpdateBirthYear" value="' . $UpdateBirthYear . '">';
+
+                            echo '<input type="submit" class="btn btn-primary" value="' . gettext('Save') . '" Name="FamilySubmit" id="FamilySubmitBottom"> ';
+                            if (AuthenticationManager::getCurrentUser()->isAddRecordsEnabled()) {
+                                echo ' <input type="submit" class="btn btn-info" value="' . gettext('Save and Add') . '" name="FamilySubmitAndAdd"> ';
+                            }
+                            echo ' <input type="button" class="btn btn-default" value="' . gettext('Cancel') . '" Name="FamilyCancel"';
+                            if ($iFamilyID > 0) {
+                                echo " onclick=\"javascript:document.location='v2/family/$iFamilyID';\">";
+                            } else {
+                                echo " onclick=\"javascript:document.location='" . SystemURLs::getRootPath() . "/v2/family';\">";
+                            }
+                            echo '</td></tr></form></table>';
+                            ?>
+                            <script src="<?= SystemURLs::getRootPath() ?>/skin/js/FamilyEditor.js"></script>
 <?php
 require 'Include/Footer.php';

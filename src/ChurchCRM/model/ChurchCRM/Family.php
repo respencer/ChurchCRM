@@ -17,15 +17,6 @@ use Propel\Runtime\Connection\ConnectionInterface;
 use Propel\Runtime\Exception\PropelException;
 use Propel\Runtime\Map\TableMap;
 
-/**
- * Skeleton subclass for representing a row from the 'family_fam' table.
- *
- *
- *
- * You should add additional methods to this class to meet the
- * application requirements.  This class will only be generated as
- * long as it does not already exist in the output directory.
- */
 class Family extends BaseFamily implements PhotoInterface
 {
     private ?Photo $photo = null;
@@ -212,8 +203,8 @@ class Family extends BaseFamily implements PhotoInterface
                 break;
             case 'edit':
                 $note->setText(gettext('Updated'));
-                $note->setEnteredBy($this->getEditedBy());
-                $note->setDateEntered($this->getDateLastEdited());
+                $note->setEnteredBy(($this->getEditedBy() === null) ? $this->getEnteredBy() : $this->getEditedBy());
+                $note->setDateEntered(($this->getDateLastEdited() === null) ? $this->getDateEntered() : $this->getDateLastEdited());
                 break;
             case 'verify':
                 $note->setText(gettext('Family Data Verified'));

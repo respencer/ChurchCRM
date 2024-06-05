@@ -5,11 +5,12 @@ use ChurchCRM\dto\Classification;
 use ChurchCRM\dto\SystemConfig;
 use ChurchCRM\dto\SystemURLs;
 use ChurchCRM\Service\MailChimpService;
+use ChurchCRM\Service\SystemService;
 
 $sPageTitle =  $family->getName() . " - " . gettext("Family");
 include SystemURLs::getDocumentRoot() . '/Include/Header.php';
 
-$curYear = (new DateTime())->format("Y");
+$currentYear = SystemService::getCurrentYear();
 $familyAddress = $family->getAddress();
 $mailchimp = new MailChimpService();
 
@@ -391,13 +392,12 @@ if (array_key_exists('idefaultFY', $_SESSION)) {
             <div class="card-body">
                 <div class="timeline">
                     <!-- timeline time label -->
-                    <div class="time-label"><span class="bg-teal"><?= $curYear ?></span></div>
+                    <div class="time-label"><span class="bg-teal"><?= $currentYear ?></span></div>
                     <!-- /.timeline-label -->
                     <!-- timeline item -->
                     <?php foreach ($familyTimeline as $item) {
-                        if ($curYear != $item['year']) {
-                            $curYear = $item['year']; ?>
-                            <div class="time-label"><span class="bg-teal"><?= $curYear ?></span></div>
+                        if ($currentYear != $item['year']) { ?>
+                            <div class="time-label"><span class="bg-teal"><?= $item['year'] ?></span></div>
                             <?php
                         } ?>
                         <div class="timeline-item">

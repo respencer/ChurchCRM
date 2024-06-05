@@ -39,7 +39,6 @@ class InputUtils
 
     public static function filterString($sInput): string
     {
-        // or use htmlspecialchars( stripslashes( ))
         return strip_tags(trim($sInput));
     }
 
@@ -55,8 +54,6 @@ class InputUtils
 
     public static function filterInt($sInput): int
     {
-        // added this to prevent deprecation warning:
-        //   PHP Deprecated:  trim(): Passing null to parameter #1 ($string) of type string is deprecated
         if ($sInput === null) {
             return 0;
         }
@@ -66,8 +63,6 @@ class InputUtils
 
     public static function filterFloat($sInput): float
     {
-        // added this to prevent deprecation warning:
-        //   PHP Deprecated:  trim(): Passing null to parameter #1 ($string) of type string is deprecated
         if ($sInput === null) {
             return 0;
         }
@@ -77,13 +72,12 @@ class InputUtils
 
     public static function filterDate($sInput): string
     {
-        // Attempts to take a date in any format and convert it to YYYY-MM-DD format
-        // Logel Philippe
+        // Take a date in any format and attempt to convert it to YYYY-MM-DD format
         if (empty($sInput)) {
             return '';
-        } else {
-            return date('Y-m-d', strtotime(str_replace('/', '-', $sInput)));
         }
+
+        return date('Y-m-d', strtotime(str_replace('/', '-', $sInput)));
     }
 
     // Sanitizes user input as a security measure
